@@ -43,10 +43,39 @@ const uid = (p) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36)
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
 /* ---------------------------------- SAMPLE DATA ---------------------------------- */
+// Real per-segment Budget + already-Exhausted amounts, taken directly from the company's
+// "Budget" tab (Google Sheet). "priorExhausted" is spend already recorded in that sheet
+// BEFORE this dashboard existed — new expenses added here are added on top of it, not
+// instead of it, so totals stay accurate with the real sheet.
+const SEGMENT_BUDGETS = {
+  "REFRESHMENTS (TEA, COFFEE, ETC.)": {
+    "Supplies - PK": { budget: 12123502, priorExhausted: 665636 },
+    "Vending machines rent": { budget: 910800, priorExhausted: 468270 },
+  },
+  "OFFICE SUPPLIES": {
+    "Janitorial expenses": { budget: 2630921, priorExhausted: 250 },
+    "Kitchen expenses": { budget: 150940, priorExhausted: 0 },
+    "Office supplies": { budget: 50365, priorExhausted: 845 },
+    "Drinking water": { budget: 2718810, priorExhausted: 905270 },
+  },
+  "MISCELLANEOUS": {
+    "Postage and Delivery": { budget: 12000, priorExhausted: 0 },
+    "Stationery": { budget: 235950, priorExhausted: 11200 },
+    "Printing and Reproduction": { budget: 200000, priorExhausted: 0 },
+    "Fare allowance": { budget: 333840, priorExhausted: 0 },
+    "Entertainment": { budget: 572840, priorExhausted: 4180 },
+    "Other Expenses": { budget: 6000, priorExhausted: 8340 },
+    "Daily meals": { budget: 400000, priorExhausted: 0 },
+    "Engagement": { budget: 200000, priorExhausted: 62471 },
+  },
+};
+const sumSegmentBudgets = (headerName) => Object.values(SEGMENT_BUDGETS[headerName] || {}).reduce((s, seg) => s + seg.budget, 0);
+const sumSegmentPriorExhausted = (headerName) => Object.values(SEGMENT_BUDGETS[headerName] || {}).reduce((s, seg) => s + (seg.priorExhausted || 0), 0);
+
 const SEED_HEADERS = [
-  { id: "h1", name: "REFRESHMENTS (TEA, COFFEE, ETC.)", budget: 100000, startDate: "2026-07-20", endDate: "", status: "Active", isDemo: true },
-  { id: "h2", name: "OFFICE SUPPLIES", budget: 70000, startDate: "2026-07-20", endDate: "", status: "Active", isDemo: true },
-  { id: "h3", name: "MISCELLANEOUS", budget: 40000, startDate: "2026-07-20", endDate: "", status: "Active", isDemo: true },
+  { id: "h1", name: "REFRESHMENTS (TEA, COFFEE, ETC.)", budget: sumSegmentBudgets("REFRESHMENTS (TEA, COFFEE, ETC.)"), startDate: "2026-07-20", endDate: "", status: "Active", isDemo: true },
+  { id: "h2", name: "OFFICE SUPPLIES", budget: sumSegmentBudgets("OFFICE SUPPLIES"), startDate: "2026-07-20", endDate: "", status: "Active", isDemo: true },
+  { id: "h3", name: "MISCELLANEOUS", budget: sumSegmentBudgets("MISCELLANEOUS"), startDate: "2026-07-20", endDate: "", status: "Active", isDemo: true },
 ];
 
 // Segment (sub-category) options per Budget Header — matches the Google Sheet's row structure.
@@ -58,18 +87,50 @@ const SEGMENTS_BY_HEADER = {
 const DEFAULT_SEGMENTS = ["General"];
 const segmentsForHeader = (headerName) => SEGMENTS_BY_HEADER[headerName] || DEFAULT_SEGMENTS;
 
+// Full segment breakdown for a header: every defined segment, each with its own real
+// Budget / Used (prior-exhausted + app-tracked) / Remaining — matching the sheet's columns.
+function getSegmentBreakdown(headerName, headerId, expenses) {
+  const knownSegments = segmentsForHeader(headerName);
+  const segBudgets = SEGMENT_BUDGETS[headerName] || {};
+  const appUsedBySegment = expenses.filter((e) => e.headerId === headerId).reduce((acc, e) => {
+    const key = e.segment || "Unspecified";
+    acc[key] = (acc[key] || 0) + Number(e.amount);
+    return acc;
+  }, {});
+
+  const rows = knownSegments.map((seg) => {
+    const info = segBudgets[seg] || {};
+    const budget = info.budget || 0;
+    const used = (info.priorExhausted || 0) + (appUsedBySegment[seg] || 0);
+    const remaining = budget - used;
+    return { segment: seg, budget, used, remaining, utilization: pct(used, budget), over: budget > 0 && used > budget };
+  });
+
+  Object.keys(appUsedBySegment).forEach((key) => {
+    if (!knownSegments.includes(key)) {
+      rows.push({ segment: key, budget: 0, used: appUsedBySegment[key], remaining: -appUsedBySegment[key], utilization: 0, over: true });
+    }
+  });
+
+  return rows;
+}
+
 // Mode of Payment options (matches the "Credit card useage" / "Petty Cash Usage" tabs on the sheet)
 const PAYMENT_MODES = ["Credit Card", "Petty Cash"];
+const PAYMENT_MODE_LIMIT = 150000; // shared limit for both Credit Card and Petty Cash
 
 // Added By options
 const ADDED_BY_OPTIONS = ["Muhammad Khaleeq Kamali", "Shahbaz Ahmed"];
 
+// Business Unit options
+const BU_OPTIONS = ["Pure", "SquatWolf", "Disrupt Lab", "Disrupt", "Wellows", "Secure", "Soft FM", "Hard FM", "HR-Ops"];
+
 const SEED_EXPENSES = [
-  { id: "e1", date: "2026-07-22", headerId: "h1", segment: "Supplies - PK", description: "Tea & coffee supplies", vendor: "Metro Cash & Carry", mode: "Petty Cash", amount: 12500, addedBy: "Shahbaz Ahmed", imageData: null, imageName: "", remarks: "", isDemo: true },
-  { id: "e2", date: "2026-08-05", headerId: "h1", segment: "Supplies - PK", description: "Lunch for Auto OS Team", vendor: "Cafe Flo", mode: "Credit Card", amount: 5238, addedBy: "Shahbaz Ahmed", imageData: null, imageName: "", remarks: "", isDemo: true },
-  { id: "e3", date: "2026-08-12", headerId: "h1", segment: "Vending machines rent", description: "Vending machine rent - Aug", vendor: "VendCo", mode: "Credit Card", amount: 15000, addedBy: "Muhammad Khaleeq Kamali", imageData: null, imageName: "", remarks: "", isDemo: true },
-  { id: "e4", date: "2026-08-03", headerId: "h2", segment: "Office supplies", description: "Stationery & supplies restock", vendor: "Paper Plus", mode: "Petty Cash", amount: 3200, addedBy: "Shahbaz Ahmed", imageData: null, imageName: "", remarks: "", isDemo: true },
-  { id: "e5", date: "2026-08-14", headerId: "h3", segment: "Postage and Delivery", description: "Courier charges", vendor: "TCS", mode: "Petty Cash", amount: 1200, addedBy: "Muhammad Khaleeq Kamali", imageData: null, imageName: "", remarks: "", isDemo: true },
+  { id: "e1", date: "2026-07-22", headerId: "h1", segment: "Supplies - PK", bu: "Soft FM", description: "Tea & coffee supplies", vendor: "Metro Cash & Carry", mode: "Petty Cash", amount: 12500, addedBy: "Shahbaz Ahmed", imageData: null, imageName: "", remarks: "", isDemo: true },
+  { id: "e2", date: "2026-08-05", headerId: "h1", segment: "Supplies - PK", bu: "Soft FM", description: "Lunch for Auto OS Team", vendor: "Cafe Flo", mode: "Credit Card", amount: 5238, addedBy: "Shahbaz Ahmed", imageData: null, imageName: "", remarks: "", isDemo: true },
+  { id: "e3", date: "2026-08-12", headerId: "h1", segment: "Vending machines rent", bu: "Soft FM", description: "Vending machine rent - Aug", vendor: "VendCo", mode: "Credit Card", amount: 15000, addedBy: "Muhammad Khaleeq Kamali", imageData: null, imageName: "", remarks: "", isDemo: true },
+  { id: "e4", date: "2026-08-03", headerId: "h2", segment: "Office supplies", bu: "Soft FM", description: "Stationery & supplies restock", vendor: "Paper Plus", mode: "Petty Cash", amount: 3200, addedBy: "Shahbaz Ahmed", imageData: null, imageName: "", remarks: "", isDemo: true },
+  { id: "e5", date: "2026-08-14", headerId: "h3", segment: "Postage and Delivery", bu: "Soft FM", description: "Courier charges", vendor: "TCS", mode: "Petty Cash", amount: 1200, addedBy: "Muhammad Khaleeq Kamali", imageData: null, imageName: "", remarks: "", isDemo: true },
 ];
 
 const STORAGE_KEY = "wsbd-app-data-v1";
@@ -106,6 +167,25 @@ function ProgressBar({ percent, over }) {
         className="h-full rounded-full transition-all"
         style={{ width: `${clamped}%`, background: color }}
       />
+    </div>
+  );
+}
+
+function SegmentRow({ seg }) {
+  return (
+    <div className="py-1.5" style={{ opacity: seg.budget > 0 ? 1 : 0.7 }}>
+      <div className="flex items-center justify-between text-xs mb-1 gap-3">
+        <span className="flex items-center gap-1.5 min-w-0">
+          <span className="truncate font-medium" style={{ color: C.text }}>{seg.segment}</span>
+          {seg.over && <Badge tone="red">Over</Badge>}
+        </span>
+        <span className="font-semibold shrink-0" style={{ color: seg.remaining < 0 ? C.red : C.text }}>{fmtPKR(seg.remaining)} left</span>
+      </div>
+      <ProgressBar percent={seg.utilization} over={seg.over} />
+      <div className="flex justify-between mt-1 text-[11px]" style={{ color: C.muted }}>
+        <span>{fmtPKR(seg.used)} used</span>
+        <span>{fmtPKR(seg.budget)} budget</span>
+      </div>
     </div>
   );
 }
@@ -276,6 +356,7 @@ export default function Dashboard() {
         vendor: r.vendor || "",
         amount: Number(r.amount) || 0,
         mode: r.mode || "",
+        bu: r.bu || "",
         addedBy: r.addedBy,
         imageData: null,
         imageName: "",
@@ -295,7 +376,9 @@ export default function Dashboard() {
   /* ---------------- Derived data ---------------- */
   const headerStats = useMemo(() => {
     return headers.map((h) => {
-      const used = expenses.filter((e) => e.headerId === h.id).reduce((s, e) => s + Number(e.amount), 0);
+      const priorExhausted = sumSegmentPriorExhausted(h.name);
+      const appUsed = expenses.filter((e) => e.headerId === h.id).reduce((s, e) => s + Number(e.amount), 0);
+      const used = priorExhausted + appUsed;
       const remaining = h.budget - used;
       const utilization = pct(used, h.budget);
       return { ...h, used, remaining, utilization, over: used > h.budget };
@@ -303,13 +386,24 @@ export default function Dashboard() {
   }, [headers, expenses]);
 
   const totals = useMemo(() => {
-    const totalBudget = headers.filter(h => h.status === "Active").reduce((s, h) => s + Number(h.budget), 0);
-    const totalUsed = expenses.reduce((s, e) => s + Number(e.amount), 0);
+    const activeStats = headerStats.filter((h) => h.status === "Active");
+    const totalBudget = activeStats.reduce((s, h) => s + Number(h.budget), 0);
+    const totalUsed = activeStats.reduce((s, h) => s + h.used, 0);
     return { totalBudget, totalUsed, remaining: totalBudget - totalUsed, utilization: pct(totalUsed, totalBudget) };
-  }, [headers, expenses]);
+  }, [headerStats]);
 
   const overBudgetHeaders = headerStats.filter((h) => h.over);
   const headerNameById = useMemo(() => Object.fromEntries(headers.map((h) => [h.id, h.name])), [headers]);
+
+  const paymentModeStats = useMemo(() => {
+    return PAYMENT_MODES.map((mode) => {
+      const used = expenses.filter((e) => e.mode === mode).reduce((s, e) => s + Number(e.amount), 0);
+      const remaining = PAYMENT_MODE_LIMIT - used;
+      return { mode, limit: PAYMENT_MODE_LIMIT, used, remaining, utilization: pct(used, PAYMENT_MODE_LIMIT), over: used > PAYMENT_MODE_LIMIT };
+    });
+  }, [expenses]);
+
+  const [paymentModeView, setPaymentModeView] = useState(null); // null | "Credit Card" | "Petty Cash"
 
   /* ---------------- Expense CRUD ---------------- */
   function saveExpense(form, editingId) {
@@ -475,6 +569,8 @@ export default function Dashboard() {
               overBudgetHeaders={overBudgetHeaders}
               expenses={expenses}
               headerNameById={headerNameById}
+              paymentModeStats={paymentModeStats}
+              onViewPaymentMode={(mode) => setPaymentModeView(mode)}
               onAddExpense={() => setExpenseModal({})}
               onEditExpense={(e) => setExpenseModal(e)}
               onDeleteExpense={(id) => setDeleteExpenseId(id)}
@@ -484,6 +580,7 @@ export default function Dashboard() {
           {view === "headers" && (
             <HeadersView
               headerStats={headerStats}
+              expenses={expenses}
               onAdd={() => setHeaderModal({})}
               onEdit={(h) => setHeaderModal(h)}
               onDelete={(id) => setDeleteHeaderId(id)}
@@ -524,6 +621,7 @@ export default function Dashboard() {
           onClose={() => setExpenseModal(null)}
           onSave={saveExpense}
           headerStats={headerStats}
+          expenses={expenses}
           notify={notify}
         />
       )}
@@ -544,6 +642,15 @@ export default function Dashboard() {
           body="This cannot be undone. Headers with linked expenses cannot be deleted."
           onCancel={() => setDeleteHeaderId(null)}
           onConfirm={() => deleteHeader(deleteHeaderId)}
+        />
+      )}
+      {paymentModeView && (
+        <PaymentModeModal
+          mode={paymentModeView}
+          stats={paymentModeStats.find((p) => p.mode === paymentModeView)}
+          expenses={expenses.filter((e) => e.mode === paymentModeView)}
+          headerNameById={headerNameById}
+          onClose={() => setPaymentModeView(null)}
         />
       )}
       <Toast toast={toast} />
@@ -575,8 +682,9 @@ function KPICard({ label, value, sub, icon: Icon, tone }) {
 }
 
 /* ---------------------------------- DASHBOARD VIEW ---------------------------------- */
-function DashboardView({ totals, headerStats, overBudgetHeaders, expenses, headerNameById, onAddExpense, onEditExpense, onDeleteExpense, onViewAll }) {
+function DashboardView({ totals, headerStats, overBudgetHeaders, expenses, headerNameById, paymentModeStats, onViewPaymentMode, onAddExpense, onEditExpense, onDeleteExpense, onViewAll }) {
   const recent = [...expenses].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
+  const [expandedHeaderId, setExpandedHeaderId] = useState(null);
 
   return (
     <div className="space-y-6">
@@ -597,32 +705,91 @@ function DashboardView({ totals, headerStats, overBudgetHeaders, expenses, heade
         <KPICard label="Utilization" value={`${totals.utilization.toFixed(1)}%`} sub="Overall budget consumed" icon={FileBarChart2} tone={totals.utilization > 100 ? "red" : "blue"} />
       </div>
 
+      {paymentModeStats && (
+        <div>
+          <h3 className="text-sm font-semibold mb-3" style={{ color: C.text }}>Payment Mode Limits</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {paymentModeStats.map((p) => (
+              <button
+                key={p.mode}
+                onClick={() => onViewPaymentMode(p.mode)}
+                className="text-left rounded-2xl p-5 shadow-sm flex items-center gap-5 transition-all duration-200 hover:shadow-md hover:-translate-y-0.5"
+                style={{ background: C.card, border: `1px solid ${p.over ? "#F3C7C3" : C.border}` }}
+              >
+                <Gauge percent={p.utilization} size={84} stroke={8} over={p.over} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm font-semibold" style={{ color: C.text }}>{p.mode}</span>
+                    {p.over && <Badge tone="red">Over Limit</Badge>}
+                  </div>
+                  <div className="space-y-1 text-xs">
+                    <div className="flex justify-between"><span style={{ color: C.muted }}>Limit</span><span className="font-semibold" style={{ color: C.text }}>{fmtPKR(p.limit)}</span></div>
+                    <div className="flex justify-between"><span style={{ color: C.muted }}>Used</span><span className="font-semibold" style={{ color: C.text }}>{fmtPKR(p.used)}</span></div>
+                    <div className="flex justify-between"><span style={{ color: C.muted }}>Remaining</span><span className="font-semibold" style={{ color: p.remaining < 0 ? C.red : C.green }}>{fmtPKR(p.remaining)}</span></div>
+                  </div>
+                  <div className="mt-2 text-xs font-semibold flex items-center gap-1" style={{ color: C.green }}>
+                    View details <ChevronRight size={13} />
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <div className="xl:col-span-2 rounded-2xl shadow-sm overflow-hidden" style={{ background: C.card, border: `1px solid ${C.border}` }}>
           <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: `1px solid ${C.border}` }}>
             <h3 className="text-sm font-semibold" style={{ color: C.text }}>Budget Overview by Header</h3>
           </div>
           <div className="divide-y" style={{ borderColor: C.border }}>
-            {headerStats.map((h) => (
-              <div key={h.id} className="px-5 py-4 flex items-center gap-4" style={{ borderBottom: `1px solid ${C.border}` }}>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                    <span className="text-sm font-semibold truncate" style={{ color: C.text }}>{h.name}</span>
-                    {h.over && <Badge tone="red">Over Budget</Badge>}
-                    {!h.over && h.utilization >= 80 && <Badge tone="amber">Near Limit</Badge>}
+            {headerStats.map((h) => {
+              const isOpen = expandedHeaderId === h.id;
+              const segmentBreakdown = isOpen ? getSegmentBreakdown(h.name, h.id, expenses) : [];
+              return (
+                <div key={h.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <div
+                    className="px-5 py-4 flex items-center gap-3 cursor-pointer transition-colors hover:bg-[#FAFCFB]"
+                    onClick={() => setExpandedHeaderId(isOpen ? null : h.id)}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                        <span className="text-sm font-semibold truncate" style={{ color: C.text }}>{h.name}</span>
+                        {h.over && <Badge tone="red">Over Budget</Badge>}
+                        {!h.over && h.utilization >= 80 && <Badge tone="amber">Near Limit</Badge>}
+                      </div>
+                      <ProgressBar percent={h.utilization} over={h.over} />
+                      <div className="flex justify-between mt-1.5 text-xs" style={{ color: C.muted }}>
+                        <span>{fmtPKR(h.used)} used</span>
+                        <span>{fmtPKR(h.budget)} budget</span>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0 hidden sm:block">
+                      <div className="text-sm font-bold" style={{ color: h.over ? C.red : C.text }}>{h.utilization.toFixed(1)}%</div>
+                      <div className="text-xs" style={{ color: h.remaining < 0 ? C.red : C.muted }}>{fmtPKR(Math.abs(h.remaining))} {h.remaining < 0 ? "over" : "left"}</div>
+                    </div>
+                    <ChevronRight
+                      size={16}
+                      color={C.muted}
+                      className="shrink-0 transition-transform duration-200"
+                      style={{ transform: isOpen ? "rotate(90deg)" : "rotate(0deg)" }}
+                    />
                   </div>
-                  <ProgressBar percent={h.utilization} over={h.over} />
-                  <div className="flex justify-between mt-1.5 text-xs" style={{ color: C.muted }}>
-                    <span>{fmtPKR(h.used)} used</span>
-                    <span>{fmtPKR(h.budget)} budget</span>
-                  </div>
+                  {isOpen && (
+                    <div className="px-5 pb-4 -mt-1" style={{ background: "#FAFCFB" }}>
+                      <div className="text-[10px] font-semibold uppercase tracking-wide mb-2 pt-3" style={{ color: C.muted }}>Segment Breakdown</div>
+                      {segmentBreakdown.length === 0 ? (
+                        <div className="text-xs pb-1" style={{ color: C.muted }}>No entries yet for this header.</div>
+                      ) : (
+                        <div className="divide-y" style={{ borderColor: C.border }}>
+                          {segmentBreakdown.map((seg) => <SegmentRow key={seg.segment} seg={seg} />)}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <div className="text-right shrink-0 hidden sm:block">
-                  <div className="text-sm font-bold" style={{ color: h.over ? C.red : C.text }}>{h.utilization.toFixed(1)}%</div>
-                  <div className="text-xs" style={{ color: h.remaining < 0 ? C.red : C.muted }}>{fmtPKR(Math.abs(h.remaining))} {h.remaining < 0 ? "over" : "left"}</div>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -746,6 +913,7 @@ function TrendTooltip({ active, payload, label }) {
 
 /* ---------------------------------- EXPENSE TABLE ---------------------------------- */
 function ExpenseTable({ rows, headerNameById, onEdit, onDelete }) {
+  const showActions = !!(onEdit || onDelete);
   if (rows.length === 0) {
     return <div className="px-5 py-10 text-center text-sm" style={{ color: C.muted }}>No expense entries yet. Add your first expense to get started.</div>;
   }
@@ -754,7 +922,7 @@ function ExpenseTable({ rows, headerNameById, onEdit, onDelete }) {
       <table className="w-full text-sm">
         <thead>
           <tr style={{ background: "#FAFCFB" }}>
-            {["Date", "Budget Header", "Segment", "Description", "Amount", "Mode", "Added By", ""].map((h) => (
+            {["Date", "Budget Header", "Segment", "Description", "Amount", "Mode", "BU", "Added By", ...(showActions ? [""] : [])].map((h) => (
               <th key={h} className="text-left px-5 py-2.5 text-xs font-semibold uppercase tracking-wide" style={{ color: C.muted }}>{h}</th>
             ))}
           </tr>
@@ -773,13 +941,16 @@ function ExpenseTable({ rows, headerNameById, onEdit, onDelete }) {
               <td className="px-5 py-3 max-w-[220px] truncate" title={e.description} style={{ color: C.text }}>{e.description}</td>
               <td className="px-5 py-3 font-semibold whitespace-nowrap" style={{ color: C.text }}>{fmtPKR(e.amount)}</td>
               <td className="px-5 py-3 whitespace-nowrap" style={{ color: C.muted }}>{e.mode || "—"}</td>
+              <td className="px-5 py-3 whitespace-nowrap" style={{ color: C.muted }}>{e.bu || "—"}</td>
               <td className="px-5 py-3 whitespace-nowrap" style={{ color: C.muted }}>{e.addedBy}</td>
-              <td className="px-5 py-3">
-                <div className="flex items-center gap-2 justify-end">
-                  <button onClick={() => onEdit(e)} className="p-1.5 rounded-lg hover:bg-gray-100"><Pencil size={14} color={C.muted} /></button>
-                  <button onClick={() => onDelete(e.id)} className="p-1.5 rounded-lg hover:bg-gray-100"><Trash2 size={14} color={C.red} /></button>
-                </div>
-              </td>
+              {showActions && (
+                <td className="px-5 py-3">
+                  <div className="flex items-center gap-2 justify-end">
+                    {onEdit && <button onClick={() => onEdit(e)} className="p-1.5 rounded-lg hover:bg-gray-100"><Pencil size={14} color={C.muted} /></button>}
+                    {onDelete && <button onClick={() => onDelete(e.id)} className="p-1.5 rounded-lg hover:bg-gray-100"><Trash2 size={14} color={C.red} /></button>}
+                  </div>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -788,50 +959,104 @@ function ExpenseTable({ rows, headerNameById, onEdit, onDelete }) {
   );
 }
 
-/* ---------------------------------- HEADERS VIEW ---------------------------------- */
-function HeadersView({ headerStats, onAdd, onEdit, onDelete }) {
+/* ---------------------------------- PAYMENT MODE MODAL ---------------------------------- */
+function PaymentModeModal({ mode, stats, expenses, headerNameById, onClose }) {
+  if (!stats) return null;
+  const sorted = [...expenses].sort((a, b) => new Date(b.date) - new Date(a.date));
+  return (
+    <Modal title={`${mode} — Limit Overview`} onClose={onClose} wide>
+      <div className="flex items-center gap-6 mb-5 flex-wrap">
+        <Gauge percent={stats.utilization} size={120} stroke={11} over={stats.over} />
+        <div className="flex-1 min-w-[180px] space-y-2 text-sm">
+          <div className="flex justify-between"><span style={{ color: C.muted }}>Limit</span><span className="font-semibold" style={{ color: C.text }}>{fmtPKR(stats.limit)}</span></div>
+          <div className="flex justify-between"><span style={{ color: C.muted }}>Used</span><span className="font-semibold" style={{ color: C.text }}>{fmtPKR(stats.used)}</span></div>
+          <div className="flex justify-between"><span style={{ color: C.muted }}>Remaining</span><span className="font-semibold" style={{ color: stats.remaining < 0 ? C.red : C.green }}>{fmtPKR(stats.remaining)}</span></div>
+          <div className="flex justify-between"><span style={{ color: C.muted }}>Entries</span><span className="font-semibold" style={{ color: C.text }}>{expenses.length}</span></div>
+        </div>
+      </div>
+      {stats.over && (
+        <div className="flex items-start gap-2 rounded-xl px-4 py-3 mb-4" style={{ background: C.redLight }}>
+          <AlertTriangle size={16} color={C.red} className="shrink-0 mt-0.5" />
+          <div className="text-xs" style={{ color: "#7A241E" }}>
+            <span className="font-semibold">{mode} is over its {fmtPKR(stats.limit)} limit</span> by {fmtPKR(Math.abs(stats.remaining))}.
+          </div>
+        </div>
+      )}
+      <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.border}` }}>
+        <ExpenseTable rows={sorted} headerNameById={headerNameById} />
+      </div>
+    </Modal>
+  );
+}
+
+
+function HeadersView({ headerStats, expenses, onAdd, onEdit, onDelete }) {
+  const [expandedId, setExpandedId] = useState(null);
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <p className="text-sm" style={{ color: C.muted }}>Manage allocated budgets for each Workplace Services spending category.</p>
+        <p className="text-sm" style={{ color: C.muted }}>Manage allocated budgets for each Workplace Services spending category. Click a card to see its segment breakdown.</p>
         <button onClick={onAdd} className="flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold text-white shrink-0" style={{ background: C.green }}>
           <Plus size={16} /> Add Header
         </button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {headerStats.map((h) => (
-          <div key={h.id} className="rounded-2xl p-5 shadow-sm" style={{ background: C.card, border: `1px solid ${h.over ? "#F3C7C3" : C.border}` }}>
-            <div className="flex items-start justify-between mb-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h4 className="text-sm font-semibold truncate" style={{ color: C.text }}>{h.name}</h4>
-                  {h.isDemo && <Badge tone="muted">Demo</Badge>}
+        {headerStats.map((h) => {
+          const isOpen = expandedId === h.id;
+          const segmentBreakdown = isOpen ? getSegmentBreakdown(h.name, h.id, expenses) : [];
+          return (
+            <div
+              key={h.id}
+              className="rounded-2xl p-5 shadow-sm cursor-pointer transition-all duration-200 hover:shadow-md"
+              style={{ background: C.card, border: `1px solid ${h.over ? "#F3C7C3" : C.border}` }}
+              onClick={() => setExpandedId(isOpen ? null : h.id)}
+            >
+              <div className="flex items-start justify-between mb-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h4 className="text-sm font-semibold truncate" style={{ color: C.text }}>{h.name}</h4>
+                    {h.isDemo && <Badge tone="muted">Demo</Badge>}
+                  </div>
+                  <Badge tone={h.status === "Active" ? "green" : "muted"}>{h.status}</Badge>
                 </div>
-                <Badge tone={h.status === "Active" ? "green" : "muted"}>{h.status}</Badge>
+                <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                  <button onClick={() => onEdit(h)} className="p-1.5 rounded-lg hover:bg-gray-100"><Pencil size={14} color={C.muted} /></button>
+                  <button onClick={() => onDelete(h.id)} className="p-1.5 rounded-lg hover:bg-gray-100"><Trash2 size={14} color={C.red} /></button>
+                </div>
               </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <button onClick={() => onEdit(h)} className="p-1.5 rounded-lg hover:bg-gray-100"><Pencil size={14} color={C.muted} /></button>
-                <button onClick={() => onDelete(h.id)} className="p-1.5 rounded-lg hover:bg-gray-100"><Trash2 size={14} color={C.red} /></button>
+              <div className="flex items-center gap-4">
+                <Gauge percent={h.utilization} size={92} stroke={9} over={h.over} />
+                <div className="flex-1 space-y-1.5 text-xs">
+                  <div className="flex justify-between"><span style={{ color: C.muted }}>Budget</span><span className="font-semibold" style={{ color: C.text }}>{fmtPKR(h.budget)}</span></div>
+                  <div className="flex justify-between"><span style={{ color: C.muted }}>Used</span><span className="font-semibold" style={{ color: C.text }}>{fmtPKR(h.used)}</span></div>
+                  <div className="flex justify-between"><span style={{ color: C.muted }}>Remaining</span><span className="font-semibold" style={{ color: h.remaining < 0 ? C.red : C.green }}>{fmtPKR(h.remaining)}</span></div>
+                </div>
               </div>
+              {h.over && (
+                <div className="mt-3 flex items-center gap-1.5 text-xs font-medium rounded-lg px-3 py-2" style={{ background: C.redLight, color: C.red }}>
+                  <AlertTriangle size={13} /> Over budget by {fmtPKR(Math.abs(h.remaining))}
+                </div>
+              )}
+              <div className="mt-3 flex items-center justify-between text-xs" style={{ color: C.muted }}>
+                <span>{fmtDate(h.startDate)} {h.endDate ? `→ ${fmtDate(h.endDate)}` : "→ Till Date"}</span>
+                <span className="flex items-center gap-1 font-semibold" style={{ color: C.green }}>
+                  Segments <ChevronRight size={13} className="transition-transform duration-200" style={{ transform: isOpen ? "rotate(90deg)" : "rotate(0deg)" }} />
+                </span>
+              </div>
+              {isOpen && (
+                <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${C.border}` }}>
+                  {segmentBreakdown.length === 0 ? (
+                    <div className="text-xs" style={{ color: C.muted }}>No entries yet for this header.</div>
+                  ) : (
+                    <div className="divide-y" style={{ borderColor: C.border }}>
+                      {segmentBreakdown.map((seg) => <SegmentRow key={seg.segment} seg={seg} />)}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-            <div className="flex items-center gap-4">
-              <Gauge percent={h.utilization} size={92} stroke={9} over={h.over} />
-              <div className="flex-1 space-y-1.5 text-xs">
-                <div className="flex justify-between"><span style={{ color: C.muted }}>Budget</span><span className="font-semibold" style={{ color: C.text }}>{fmtPKR(h.budget)}</span></div>
-                <div className="flex justify-between"><span style={{ color: C.muted }}>Used</span><span className="font-semibold" style={{ color: C.text }}>{fmtPKR(h.used)}</span></div>
-                <div className="flex justify-between"><span style={{ color: C.muted }}>Remaining</span><span className="font-semibold" style={{ color: h.remaining < 0 ? C.red : C.green }}>{fmtPKR(h.remaining)}</span></div>
-              </div>
-            </div>
-            {h.over && (
-              <div className="mt-3 flex items-center gap-1.5 text-xs font-medium rounded-lg px-3 py-2" style={{ background: C.redLight, color: C.red }}>
-                <AlertTriangle size={13} /> Over budget by {fmtPKR(Math.abs(h.remaining))}
-              </div>
-            )}
-            <div className="mt-3 text-xs" style={{ color: C.muted }}>
-              {fmtDate(h.startDate)} {h.endDate ? `→ ${fmtDate(h.endDate)}` : "→ Till Date"}
-            </div>
-          </div>
-        ))}
+          );
+        })}
         {headerStats.length === 0 && (
           <div className="col-span-full text-center py-14 text-sm" style={{ color: C.muted }}>No budget headers yet. Add one to get started.</div>
         )}
@@ -1048,8 +1273,8 @@ function downloadCSV(csv, filename) {
 
 function ExportView({ headers, expenses, headerNameById, notify }) {
   const exportExpenses = () => {
-    const rows = [["Date", "Budget Header", "Segment", "Description", "Vendor/Purpose", "Amount (PKR)", "Mode of Payment", "Added By", "Remarks"]];
-    expenses.forEach((e) => rows.push([fmtDate(e.date), headerNameById[e.headerId] || "—", e.segment || "", e.description, e.vendor || "", e.amount, e.mode || "", e.addedBy, e.remarks || ""]));
+    const rows = [["Date", "Budget Header", "Segment", "Description", "Vendor/Purpose", "Amount (PKR)", "Mode of Payment", "BU", "Added By", "Remarks"]];
+    expenses.forEach((e) => rows.push([fmtDate(e.date), headerNameById[e.headerId] || "—", e.segment || "", e.description, e.vendor || "", e.amount, e.mode || "", e.bu || "", e.addedBy, e.remarks || ""]));
     downloadCSV(toCSV(rows), "expense-entries.csv");
     notify("Expense entries exported.");
   };
@@ -1175,7 +1400,7 @@ function SettingsView({ onReset, onClear, headerCount, expenseCount, onPull, syn
 }
 
 /* ---------------------------------- EXPENSE MODAL ---------------------------------- */
-function ExpenseModal({ headers, initial, onClose, onSave, headerStats, notify }) {
+function ExpenseModal({ headers, initial, onClose, onSave, headerStats, expenses, notify }) {
   const editingId = initial?.id || null;
   const initialHeaderId = initial?.headerId || (headers[0]?.id || "");
   const initialHeaderName = headers.find((h) => h.id === initialHeaderId)?.name || "";
@@ -1187,6 +1412,7 @@ function ExpenseModal({ headers, initial, onClose, onSave, headerStats, notify }
     amount: initial?.amount ?? "",
     mode: initial?.mode || PAYMENT_MODES[0],
     vendor: initial?.vendor || "",
+    bu: initial?.bu || BU_OPTIONS[0],
     addedBy: initial?.addedBy || ADDED_BY_OPTIONS[0],
     imageData: initial?.imageData || null,
     imageName: initial?.imageName || "",
@@ -1197,6 +1423,11 @@ function ExpenseModal({ headers, initial, onClose, onSave, headerStats, notify }
   const projected = selectedHeader ? selectedHeader.used + Number(form.amount || 0) : 0;
   const willExceed = selectedHeader && Number(form.amount) > 0 && projected > selectedHeader.budget;
   const segmentOptions = segmentsForHeader(selectedHeader?.name || "");
+  const segmentStats = selectedHeader
+    ? getSegmentBreakdown(selectedHeader.name, selectedHeader.id, expenses).find((s) => s.segment === form.segment)
+    : null;
+  const segmentProjected = segmentStats ? segmentStats.used + Number(form.amount || 0) : 0;
+  const segmentWillExceed = segmentStats && segmentStats.budget > 0 && Number(form.amount) > 0 && segmentProjected > segmentStats.budget;
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -1240,10 +1471,10 @@ function ExpenseModal({ headers, initial, onClose, onSave, headerStats, notify }
           </select>
         </Field>
         {selectedHeader && (
-          <div className="sm:col-span-2 -mt-1 mb-3">
+          <div className="sm:col-span-2 -mt-1 mb-3 space-y-2">
             <div className="rounded-xl px-4 py-3 grid grid-cols-3 gap-2" style={{ background: C.bg, border: `1px solid ${C.border}` }}>
               <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: C.muted }}>Budget</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: C.muted }}>Header Budget</div>
                 <div className="text-sm font-bold tabular-nums" style={{ color: C.text }}>{fmtPKR(selectedHeader.budget)}</div>
               </div>
               <div>
@@ -1255,6 +1486,22 @@ function ExpenseModal({ headers, initial, onClose, onSave, headerStats, notify }
                 <div className="text-sm font-bold tabular-nums" style={{ color: selectedHeader.remaining < 0 ? C.red : C.green }}>{fmtPKR(selectedHeader.remaining)}</div>
               </div>
             </div>
+            {segmentStats && segmentStats.budget > 0 && (
+              <div className="rounded-xl px-4 py-3 grid grid-cols-3 gap-2" style={{ background: C.greenLight, border: `1px solid ${C.border}` }}>
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: C.muted }} title={segmentStats.segment}>{segmentStats.segment}</div>
+                  <div className="text-sm font-bold tabular-nums" style={{ color: C.text }}>{fmtPKR(segmentStats.budget)}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: C.muted }}>Used</div>
+                  <div className="text-sm font-bold tabular-nums" style={{ color: C.text }}>{fmtPKR(segmentStats.used)}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: C.muted }}>Available</div>
+                  <div className="text-sm font-bold tabular-nums" style={{ color: segmentStats.remaining < 0 ? C.red : C.green }}>{fmtPKR(segmentStats.remaining)}</div>
+                </div>
+              </div>
+            )}
           </div>
         )}
         <div className="sm:col-span-2">
@@ -1267,6 +1514,11 @@ function ExpenseModal({ headers, initial, onClose, onSave, headerStats, notify }
           </select>
         </Field>
         <Field label="Vendor / Purpose"><input value={form.vendor} onChange={set("vendor")} placeholder="e.g. Prompt Cafe, 140-H" style={inputStyle} /></Field>
+        <Field label="BU">
+          <select value={form.bu} onChange={set("bu")} style={inputStyle}>
+            {BU_OPTIONS.map((b) => <option key={b} value={b}>{b}</option>)}
+          </select>
+        </Field>
         <Field label="Added By">
           <select value={form.addedBy} onChange={set("addedBy")} style={inputStyle}>
             {ADDED_BY_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
@@ -1292,6 +1544,14 @@ function ExpenseModal({ headers, initial, onClose, onSave, headerStats, notify }
         </div>
       </div>
 
+      {segmentWillExceed && (
+        <div className="flex items-start gap-2 rounded-xl px-4 py-3 mb-2" style={{ background: C.redLight }}>
+          <AlertTriangle size={16} color={C.red} className="shrink-0 mt-0.5" />
+          <div className="text-xs" style={{ color: "#7A241E" }}>
+            <span className="font-semibold">This will exceed the {segmentStats.segment} segment budget</span> by {fmtPKR(segmentProjected - segmentStats.budget)}.
+          </div>
+        </div>
+      )}
       {willExceed && (
         <div className="flex items-start gap-2 rounded-xl px-4 py-3 mb-2" style={{ background: C.redLight }}>
           <AlertTriangle size={16} color={C.red} className="shrink-0 mt-0.5" />
