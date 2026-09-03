@@ -49,11 +49,11 @@ const SEED_HEADERS = [
   { id: "h3", name: "MISCELLANEOUS", budget: 40000, startDate: "2026-07-20", endDate: "", status: "Active", isDemo: true },
 ];
 
-// Segment (sub-category) options per Budget Header. "REFRESHMENTS..." maps to the
-// two segments confirmed so far; other headers fall back to DEFAULT_SEGMENTS until
-// their real segment lists are shared (matches the Google Sheet's row structure).
+// Segment (sub-category) options per Budget Header — matches the Google Sheet's row structure.
 const SEGMENTS_BY_HEADER = {
   "REFRESHMENTS (TEA, COFFEE, ETC.)": ["Supplies - PK", "Vending machines rent"],
+  "OFFICE SUPPLIES": ["Janitorial expenses", "Kitchen expenses", "Office supplies", "Drinking water"],
+  "MISCELLANEOUS": ["Postage and Delivery", "Stationery", "Printing and Reproduction", "Fare allowance", "Entertainment", "Other Expenses", "Daily meals", "Engagement"],
 };
 const DEFAULT_SEGMENTS = ["General"];
 const segmentsForHeader = (headerName) => SEGMENTS_BY_HEADER[headerName] || DEFAULT_SEGMENTS;
@@ -68,8 +68,8 @@ const SEED_EXPENSES = [
   { id: "e1", date: "2026-07-22", headerId: "h1", segment: "Supplies - PK", description: "Tea & coffee supplies", vendor: "Metro Cash & Carry", mode: "Petty Cash", amount: 12500, addedBy: "Shahbaz Ahmed", imageData: null, imageName: "", remarks: "", isDemo: true },
   { id: "e2", date: "2026-08-05", headerId: "h1", segment: "Supplies - PK", description: "Lunch for Auto OS Team", vendor: "Cafe Flo", mode: "Credit Card", amount: 5238, addedBy: "Shahbaz Ahmed", imageData: null, imageName: "", remarks: "", isDemo: true },
   { id: "e3", date: "2026-08-12", headerId: "h1", segment: "Vending machines rent", description: "Vending machine rent - Aug", vendor: "VendCo", mode: "Credit Card", amount: 15000, addedBy: "Muhammad Khaleeq Kamali", imageData: null, imageName: "", remarks: "", isDemo: true },
-  { id: "e4", date: "2026-08-03", headerId: "h2", segment: "General", description: "Stationery restock", vendor: "Paper Plus", mode: "Petty Cash", amount: 3200, addedBy: "Shahbaz Ahmed", imageData: null, imageName: "", remarks: "", isDemo: true },
-  { id: "e5", date: "2026-08-14", headerId: "h3", segment: "General", description: "Courier charges", vendor: "TCS", mode: "Petty Cash", amount: 1200, addedBy: "Muhammad Khaleeq Kamali", imageData: null, imageName: "", remarks: "", isDemo: true },
+  { id: "e4", date: "2026-08-03", headerId: "h2", segment: "Office supplies", description: "Stationery & supplies restock", vendor: "Paper Plus", mode: "Petty Cash", amount: 3200, addedBy: "Shahbaz Ahmed", imageData: null, imageName: "", remarks: "", isDemo: true },
+  { id: "e5", date: "2026-08-14", headerId: "h3", segment: "Postage and Delivery", description: "Courier charges", vendor: "TCS", mode: "Petty Cash", amount: 1200, addedBy: "Muhammad Khaleeq Kamali", imageData: null, imageName: "", remarks: "", isDemo: true },
 ];
 
 const STORAGE_KEY = "wsbd-app-data-v1";
@@ -1239,6 +1239,24 @@ function ExpenseModal({ headers, initial, onClose, onSave, headerStats, notify }
             {segmentOptions.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
         </Field>
+        {selectedHeader && (
+          <div className="sm:col-span-2 -mt-1 mb-3">
+            <div className="rounded-xl px-4 py-3 grid grid-cols-3 gap-2" style={{ background: C.bg, border: `1px solid ${C.border}` }}>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: C.muted }}>Budget</div>
+                <div className="text-sm font-bold tabular-nums" style={{ color: C.text }}>{fmtPKR(selectedHeader.budget)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: C.muted }}>Used So Far</div>
+                <div className="text-sm font-bold tabular-nums" style={{ color: C.text }}>{fmtPKR(selectedHeader.used)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: C.muted }}>Available</div>
+                <div className="text-sm font-bold tabular-nums" style={{ color: selectedHeader.remaining < 0 ? C.red : C.green }}>{fmtPKR(selectedHeader.remaining)}</div>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="sm:col-span-2">
           <Field label="Description"><input value={form.description} onChange={set("description")} placeholder="e.g. Lunch for Auto OS Team" style={inputStyle} /></Field>
         </div>
