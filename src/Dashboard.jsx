@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Wallet, ReceiptText, FileBarChart2, Download,
   Settings as SettingsIcon, Plus, X, Pencil, Trash2, AlertTriangle,
   CheckCircle2, Search, TrendingUp, TrendingDown, Eye, Menu,
-  ChevronRight, RotateCcw, Info, Leaf
+  ChevronRight, RotateCcw, Info, Leaf, FileText
 } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Legend, ResponsiveContainer, Tooltip as RTooltip } from "recharts";
 
@@ -279,6 +279,7 @@ const inputStyle = {
 export default function Dashboard() {
   const [headers, setHeaders] = useState(SEED_HEADERS);
   const [expenses, setExpenses] = useState(SEED_EXPENSES);
+  const [topUps, setTopUps] = useState([]); // { id, mode, date, amount }
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -299,6 +300,7 @@ export default function Dashboard() {
         const parsed = JSON.parse(raw);
         if (parsed.headers?.length) setHeaders(parsed.headers);
         if (parsed.expenses) setExpenses(parsed.expenses);
+        if (parsed.topUps) setTopUps(parsed.topUps);
       }
     } catch (e) {
       // no saved data yet — keep seed data
@@ -311,11 +313,11 @@ export default function Dashboard() {
   useEffect(() => {
     if (!loaded) return;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ headers, expenses }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ headers, expenses, topUps }));
     } catch (e) {
       console.error("Storage error", e);
     }
-  }, [headers, expenses, loaded]);
+  }, [headers, expenses, topUps, loaded]);
 
   const notify = (msg, type = "success") => {
     setToast({ msg, type });
@@ -358,18 +360,38 @@ export default function Dashboard() {
         mode: r.mode || "",
         bu: r.bu || "",
         addedBy: r.addedBy,
+        email: r.email || "",
         imageData: null,
         imageName: "",
+        documentData: null,
+        documentName: "",
         remarks: r.remarks || "",
         receiptLink: r.receiptLink || "",
+        documentLink: r.documentLink || "",
         isDemo: false,
       }));
       setExpenses(pulled);
+      if (data.topUps) {
+        setTopUps(data.topUps.map((t) => ({ id: t.id, mode: t.mode, date: t.date, amount: Number(t.amount) || 0 })));
+      }
       notify(`Pulled ${pulled.length} entries from the Google Sheet.`);
     } catch (err) {
       notify("Couldn't pull from Google Sheet — check the Apps Script deployment.", "error");
     } finally {
       setSyncing(false);
+    }
+  }
+
+  async function pushTopUpToSheet(topUp) {
+    if (!GOOGLE_SHEETS_WEBHOOK_URL) return;
+    try {
+      await fetch(GOOGLE_SHEETS_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "topup", ...topUp }),
+      });
+    } catch (err) {
+      notify("Top-up saved locally, but couldn't sync to Google Sheet.", "error");
     }
   }
 
@@ -398,12 +420,24 @@ export default function Dashboard() {
   const paymentModeStats = useMemo(() => {
     return PAYMENT_MODES.map((mode) => {
       const used = expenses.filter((e) => e.mode === mode).reduce((s, e) => s + Number(e.amount), 0);
-      const remaining = PAYMENT_MODE_LIMIT - used;
-      return { mode, limit: PAYMENT_MODE_LIMIT, used, remaining, utilization: pct(used, PAYMENT_MODE_LIMIT), over: used > PAYMENT_MODE_LIMIT };
+      const toppedUp = topUps.filter((t) => t.mode === mode).reduce((s, t) => s + Number(t.amount), 0);
+      const limit = PAYMENT_MODE_LIMIT + toppedUp;
+      const remaining = limit - used;
+      return { mode, limit, used, remaining, toppedUp, utilization: pct(used, limit), over: used > limit };
     });
-  }, [expenses]);
+  }, [expenses, topUps]);
 
   const [paymentModeView, setPaymentModeView] = useState(null); // null | "Credit Card" | "Petty Cash"
+
+  function addTopUp(mode, date, amount) {
+    const amt = Number(amount);
+    if (!date) return notify("Please select a date.", "error");
+    if (isNaN(amt) || amt <= 0) return notify("Top-up amount must be a positive number.", "error");
+    const topUp = { id: uid("t"), mode, date, amount: amt, createdAt: new Date().toISOString() };
+    setTopUps((prev) => [topUp, ...prev]);
+    notify(`${mode} topped up by ${fmtPKR(amt)}.`);
+    pushTopUpToSheet(topUp);
+  }
 
   /* ---------------- Expense CRUD ---------------- */
   function saveExpense(form, editingId) {
@@ -611,6 +645,9 @@ export default function Dashboard() {
               sheetConfigured={!!GOOGLE_SHEETS_WEBHOOK_URL}
             />
           )}
+          <div className="text-center text-xs py-6 mt-2" style={{ color: C.muted }}>
+            Created by Shahbaz & Khaleeq
+          </div>
         </main>
       </div>
 
@@ -651,6 +688,7 @@ export default function Dashboard() {
           expenses={expenses.filter((e) => e.mode === paymentModeView)}
           headerNameById={headerNameById}
           onClose={() => setPaymentModeView(null)}
+          onTopUp={addTopUp}
         />
       )}
       <Toast toast={toast} />
@@ -960,15 +998,29 @@ function ExpenseTable({ rows, headerNameById, onEdit, onDelete }) {
 }
 
 /* ---------------------------------- PAYMENT MODE MODAL ---------------------------------- */
-function PaymentModeModal({ mode, stats, expenses, headerNameById, onClose }) {
+function PaymentModeModal({ mode, stats, expenses, headerNameById, onClose, onTopUp }) {
+  const [showTopUp, setShowTopUp] = useState(false);
+  const [topUpDate, setTopUpDate] = useState(todayISO());
+  const [topUpAmount, setTopUpAmount] = useState("");
+
   if (!stats) return null;
   const sorted = [...expenses].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  const handleTopUp = () => {
+    onTopUp(mode, topUpDate, topUpAmount);
+    setShowTopUp(false);
+    setTopUpAmount("");
+  };
+
   return (
     <Modal title={`${mode} — Limit Overview`} onClose={onClose} wide>
       <div className="flex items-center gap-6 mb-5 flex-wrap">
         <Gauge percent={stats.utilization} size={120} stroke={11} over={stats.over} />
         <div className="flex-1 min-w-[180px] space-y-2 text-sm">
           <div className="flex justify-between"><span style={{ color: C.muted }}>Limit</span><span className="font-semibold" style={{ color: C.text }}>{fmtPKR(stats.limit)}</span></div>
+          {stats.toppedUp > 0 && (
+            <div className="flex justify-between"><span style={{ color: C.muted }}>Topped Up</span><span className="font-semibold" style={{ color: C.green }}>+{fmtPKR(stats.toppedUp)}</span></div>
+          )}
           <div className="flex justify-between"><span style={{ color: C.muted }}>Used</span><span className="font-semibold" style={{ color: C.text }}>{fmtPKR(stats.used)}</span></div>
           <div className="flex justify-between"><span style={{ color: C.muted }}>Remaining</span><span className="font-semibold" style={{ color: stats.remaining < 0 ? C.red : C.green }}>{fmtPKR(stats.remaining)}</span></div>
           <div className="flex justify-between"><span style={{ color: C.muted }}>Entries</span><span className="font-semibold" style={{ color: C.text }}>{expenses.length}</span></div>
@@ -982,6 +1034,28 @@ function PaymentModeModal({ mode, stats, expenses, headerNameById, onClose }) {
           </div>
         </div>
       )}
+
+      {!showTopUp ? (
+        <button
+          onClick={() => setShowTopUp(true)}
+          className="flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold mb-4"
+          style={{ background: C.greenLight, color: C.green }}
+        >
+          <Plus size={16} /> Top Up {mode}
+        </button>
+      ) : (
+        <div className="rounded-xl p-4 mb-4" style={{ background: C.bg, border: `1px solid ${C.border}` }}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+            <Field label="Date"><input type="date" value={topUpDate} onChange={(e) => setTopUpDate(e.target.value)} style={inputStyle} /></Field>
+            <Field label="Amount (PKR)"><input type="number" min="0" value={topUpAmount} onChange={(e) => setTopUpAmount(e.target.value)} placeholder="0" style={inputStyle} /></Field>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setShowTopUp(false)} className="rounded-lg px-3.5 py-2 text-xs font-semibold" style={{ background: "#EEF2F0", color: C.muted }}>Cancel</button>
+            <button onClick={handleTopUp} className="rounded-lg px-3.5 py-2 text-xs font-semibold text-white" style={{ background: C.green }}>Confirm Top Up</button>
+          </div>
+        </div>
+      )}
+
       <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.border}` }}>
         <ExpenseTable rows={sorted} headerNameById={headerNameById} />
       </div>
@@ -1416,6 +1490,9 @@ function ExpenseModal({ headers, initial, onClose, onSave, headerStats, expenses
     addedBy: initial?.addedBy || ADDED_BY_OPTIONS[0],
     imageData: initial?.imageData || null,
     imageName: initial?.imageName || "",
+    documentData: initial?.documentData || null,
+    documentName: initial?.documentName || "",
+    email: initial?.email || "",
     remarks: initial?.remarks || "",
   });
 
@@ -1455,6 +1532,20 @@ function ExpenseModal({ headers, initial, onClose, onSave, headerStats, expenses
     reader.readAsDataURL(file);
   };
   const removeImage = () => setForm((f) => ({ ...f, imageData: null, imageName: "" }));
+
+  const MAX_DOC_BYTES = 3 * 1024 * 1024; // ~3MB
+  const onDocumentChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > MAX_DOC_BYTES) {
+      notify?.("Document is too large — please attach a file under 3MB.", "error");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setForm((f) => ({ ...f, documentData: reader.result, documentName: file.name }));
+    reader.readAsDataURL(file);
+  };
+  const removeDocument = () => setForm((f) => ({ ...f, documentData: null, documentName: "" }));
 
   return (
     <Modal title={editingId ? "Edit Expense" : "Add Expense"} onClose={onClose} wide>
@@ -1539,6 +1630,22 @@ function ExpenseModal({ headers, initial, onClose, onSave, headerStats, expenses
             )}
           </Field>
         </div>
+        <Field label="Email (optional)"><input type="email" value={form.email} onChange={set("email")} placeholder="name@disrupt.com" style={inputStyle} /></Field>
+        <Field label="Attach Document (optional)">
+          {form.documentData ? (
+            <div className="flex items-center gap-3 rounded-xl px-3 py-2" style={{ border: `1px solid ${C.border}` }}>
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.greenLight }}>
+                <FileText size={18} color={C.green} />
+              </div>
+              <span className="text-xs flex-1 truncate" style={{ color: C.muted }}>{form.documentName}</span>
+              <button type="button" onClick={removeDocument} className="p-1.5 rounded-lg hover:bg-gray-100">
+                <X size={14} color={C.muted} />
+              </button>
+            </div>
+          ) : (
+            <input type="file" onChange={onDocumentChange} style={inputStyle} />
+          )}
+        </Field>
         <div className="sm:col-span-2">
           <Field label="Remarks (optional)"><input value={form.remarks} onChange={set("remarks")} style={inputStyle} /></Field>
         </div>
